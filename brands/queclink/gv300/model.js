@@ -1,6 +1,5 @@
 const mongoose = require('mongoose');
-
-const Gv300Schema = new mongoose.Schema({
+const schemaObject = {
   ProtocolVersion: {
     type: Number,
     required: true
@@ -113,7 +112,8 @@ const Gv300Schema = new mongoose.Schema({
   valid_position: {
     type: Boolean,
   }
-},{
+};
+const HistorySchema = new mongoose.Schema(schemaObject, {
   timestamps: false,
   collection: "gpsHistories",
   timeseries: {
@@ -124,6 +124,16 @@ const Gv300Schema = new mongoose.Schema({
   strict: false
 });
 
-const Gv300Model = mongoose.model('GpsHistory', Gv300Schema);
+const CacheSchema = new mongoose.Schema(schemaObject, {
+  timestamps: false,
+  collection: "unitsCache",
+  strict: false
+});
 
-module.exports = Gv300Model;
+const HistoryModel = mongoose.model('GpsHistory', HistorySchema);
+const CacheModel = mongoose.model('GpsCache', CacheSchema);
+
+module.exports = {
+  HistoryModel,
+  CacheModel
+};

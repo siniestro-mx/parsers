@@ -1,17 +1,19 @@
-const dotenv = require('dotenv');
+require('dotenv').config();
 const dgram = require('dgram');
 const net = require('net');
 const Gv300 = require('./parser/gv300');
-const MongooseModel = require('./model');
+const {
+  HistoryModel,
+  CacheModel
+} = require('./model');
 const brand = 'queclink';
 const model = 'gv300';
 const protocol = 'udp';
 const port = 5500;
 
-// Configurar variables de entorno
-dotenv.config();
-
-const { connectToMongoDB } = require('../../../common/dbConnection');
+const {
+  connectToMongoDB
+} = require('../../../common/dbConnection');
 
 (async () => {
   // Conectar a MongoDB
@@ -20,10 +22,10 @@ const { connectToMongoDB } = require('../../../common/dbConnection');
   // Función para procesar datos GPS y guardarlos en MongoDB
   const processAndSaveGPSData = (gpsdata, socket_info) => {
     const gps = new Gv300(gpsdata, socket_info);
-    
-    if(gps.isValid()){
+
+    if (gps.isValid()) {
       saveDataToMongoDB(gps.getData());
-    }else{
+    } else {
       console.log(gps.error);
       console.log(gpsdata.toString());
       console.dir(gps);
@@ -35,7 +37,15 @@ const { connectToMongoDB } = require('../../../common/dbConnection');
     const udpServer = dgram.createSocket('udp4');
 
     udpServer.on('message', (gpsdata, rinfo) => {
-      const socket_info = { name: `${brand}-${model}`, type: protocol, socket: udpServer, brand: brand, model: model, rinfo: rinfo, received_at: Date.now() };
+      const socket_info = {
+        name: `${brand}-${model}`,
+        type: protocol,
+        socket: udpServer,
+        brand: brand,
+        model: model,
+        rinfo: rinfo,
+        received_at: Date.now()
+      };
 
       processAndSaveGPSData(gpsdata, socket_info);
     });
@@ -46,13 +56,19 @@ const { connectToMongoDB } = require('../../../common/dbConnection');
     const tcpServer = net.createServer();
 
     tcpServer.on('connection', (socket) => {
-      const socket_info = { name: `${brand}-${model}`, type: protocol, socket: socket, brand: brand, model: model };
+      const socket_info = {
+        name: `${brand}-${model}`,
+        type: protocol,
+        socket: socket,
+        brand: brand,
+        model: model
+      };
       socket.on('data', (gpsdata) => {
         processAndSaveGPSData(gpsdata, socket_info);
       });
     });
 
-    tcpServer.listen(port, process.env.LOCANET_IP , () => {
+    tcpServer.listen(port, process.env.LOCANET_IP, () => {
       console.log(`Escuchando paquetes TCP en el puerto ${port} para el modelo ${model} de la marca ${brand}`);
     });
   } else {
@@ -61,13 +77,44 @@ const { connectToMongoDB } = require('../../../common/dbConnection');
 
   // Implementar función para guardar datos en MongoDB
   const saveDataToMongoDB = async (gpsdata) => {
-    const m_gpsdata = new MongooseModel(gpsdata);
-
+    const m_gpsdata = new HistoryModel(gpsdata);
+    const unitId = gpsdata.UniqueID;
+  
+    const unitCache = await CacheModel.findOne({ UniqueID: unitId });
+  
+    if (unitCache && unitCache.timestamps) {
+      for (const key in gpsdata) {
+        unitCache.timestamps[key] = Date.now();
+      }
+    } else {
+      const newTimestamps = {};
+      for (const key in gpsdata) {
+        newTimestamps[key] = Date.now();
+      }
+      gpsdata.timestamps = newTimestamps;
+    }
+  
+    const updateData = {
+      ...gpsdata,
+      timestamps: unitCache ? unitCache.timestamps : gpsdata.timestamps
+    };
+  
     try {
-      await m_gpsdata.save();
+      await Promise.all([
+        m_gpsdata.save(),
+        CacheModel.findOneAndUpdate({
+          UniqueID: unitId
+        }, {
+          $set: updateData
+        }, {
+          upsert: true,
+          new: true
+        })
+      ]);
       //console.log(`Datos guardados en MongoDB para el modelo ${model} de la marca ${brand}`);
     } catch (error) {
       console.error(`Error al guardar datos en MongoDB para el modelo ${model} de la marca ${brand}`, error);
     }
   };
+  
 })();
