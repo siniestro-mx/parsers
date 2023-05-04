@@ -1,6 +1,5 @@
 const mongoose = require('mongoose');
-
-const DeviceModelSchema = new mongoose.Schema({
+const schemaObject = {
   ProtocolVersion: {
     type: Number,
     required: true
@@ -20,6 +19,9 @@ const DeviceModelSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  ReportIDAndType: {
+    type: String,
+  },
   Latitude: {
     type: Number,
   },
@@ -38,6 +40,69 @@ const DeviceModelSchema = new mongoose.Schema({
   Mileage: {
     type: Number,
   },
+  GPSAccuracy: {
+    type: Number,
+  },
+  GPSUTCTime: {
+    type: Date,
+  },
+  IOStatus: {
+    type: String,
+  },
+  DeviceStatus: {
+    type: String,
+  },
+  BackupBatteryPercentage: {
+    type: Number,
+  },
+  MCC: {
+    type: String,
+  },
+  MNC: {
+    type: String,
+  },
+  LAC: {
+    type: String,
+  },
+  CellID: {
+    type: String,
+  },
+  HourMeterCount: {
+    type: Number,
+  },
+  valid: {
+    type: Boolean,
+  },
+  received_at: {
+    type: Number,
+  },
+  Engine: {
+    type: String,
+  },
+  EngineLock: {
+    type: String,
+  },
+  Address: {
+    type: String,
+  },
+  City: {
+    type: String,
+  },
+  State: {
+    type: String,
+  },
+  Country: {
+    type: String,
+  },
+  MessageType: {
+    type: String,
+  },
+  DeviceType: {
+    type: String,
+  },
+  DeviceBrand: {
+    type: String,
+  },
   Event: {
     type: String,
   },
@@ -47,7 +112,8 @@ const DeviceModelSchema = new mongoose.Schema({
   valid_position: {
     type: Boolean,
   }
-},{
+};
+const HistorySchema = new mongoose.Schema(schemaObject, {
   timestamps: false,
   collection: "gpsHistories",
   timeseries: {
@@ -55,8 +121,19 @@ const DeviceModelSchema = new mongoose.Schema({
     metaField: null, // Opcional: especifica el campo de metadatos si es necesario
     granularity: "seconds", // Opcional: segundos, minutos, horas, etc.
   },
+  strict: false
 });
 
-const ModeloDispositivoModel = mongoose.model('GpsHistory', ModeloDispositivoSchema);
+const CacheSchema = new mongoose.Schema(schemaObject, {
+  timestamps: false,
+  collection: "unitsCache",
+  strict: false
+});
 
-module.exports = ModeloDispositivoModel;
+const HistoryModel = mongoose.model('GpsHistory', HistorySchema);
+const CacheModel = mongoose.model('GpsCache', CacheSchema);
+
+module.exports = {
+  HistoryModel,
+  CacheModel
+};

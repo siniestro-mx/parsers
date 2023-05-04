@@ -2,7 +2,7 @@ const DEVICE_MODELS = require('./device_models.js');
 const parse = require('./parser.js');
 const device_index = require('./index.js');
 
-class Gv300 {
+class Device {
   /*  se declaran las propiedades del objeto:
   *     data: objeto con los datos del paquete
   *     msg_type: tipo de mensaje: report, command, acknowledgment, config, buffer
@@ -18,8 +18,8 @@ class Gv300 {
   data = {};
   msg_type = null;
   firmware = null;
-  model = 'gv300';
-  brand = "queclink";
+  model = null;
+  brand = null;
   event = null;
   valid_position = false;
   is_valid = false;
@@ -31,6 +31,9 @@ class Gv300 {
     +RESP:GTFRI,060308,862894020601574,ZBT_CORPORACION,,10,1,1,0.0,0,1116.1,-103.437155,25.548303,20200923213604,0334,0020,0FBF,31DB,00,0.0,17756:02:35,,,0,210100,,,,20200923213610,20C3$
     como llega en Buffer, se convierte a string y este se convierte en el raw_data que luego guardaremos en la base de datos
     */
+   this.brand = socket_info.brand;
+   this.model = socket_info.model;
+
     this.raw_data = data.toString();
 
     /*  Para procesar el paquete, primero se utiliza la función split(',') para separar los diferentes valores del paquete en un array. 
@@ -50,22 +53,22 @@ class Gv300 {
 
     /*  se obtiene el modelo del dispositivo, se obtiene el tipo de mensaje, se obtiene la version del firmware. Si el modelo
     obtenido del paquete no coincide con el esperado, ignorar paquete y notificar del error para que se asigne al puerto correcto */
-    this.model = Gv300.#getModel(data[1]).toLowerCase();
+    this.model = Device.#getModel(data[1]).toLowerCase();
 
     if (this.model !== socket_info.model) {
       this.error = "Modelo de dispositivo no coincide con el esperado";
       return;
     }
 
-    this.msg_type = Gv300.#getMsgType(data[0]);
+    this.msg_type = Device.#getMsgType(data[0]);
 
     if (!this.msg_type) {
       this.error = "No se pudo obtener el tipo de mensaje";
       return;
     }
 
-    this.firmware = Gv300.#getFirmwareVersion(data[1]);
-    this.event = Gv300.#getEvent(data[0]);
+    this.firmware = Device.#getFirmwareVersion(data[1]);
+    this.event = Device.#getEvent(data[0]);
 
     /*  En el caso de la marca Queclink, se requiere conocer el modelo del equipo, el tipo de mensaje y el evento, para así, podre buscar 
     los indices de las propiedades para este paquete en particular. Si alguno de los datos falta, no se puede continuar y hay que detener el parseo */
@@ -76,7 +79,7 @@ class Gv300 {
 
     /*  se intenta hacer el parseo del paquete */
     try {
-      const parsed_data = Gv300.#parse(data, socket_info, this);
+      const parsed_data = Device.#parse(data, socket_info, this);
       if (parsed_data && typeof parsed_data === 'object') {
         this.data = parsed_data;
       }
@@ -87,7 +90,7 @@ class Gv300 {
 
     /*  si el paquete no es válido, se detiene el parseo */
     if (!this.data.valid) {
-      this.error = 'Error en paquete Gv300';
+      this.error = `Error en paquete ${this.model}`;
       return;
     }
 
@@ -95,7 +98,7 @@ class Gv300 {
     se marca un error; a menos que sea un paquete GTALC, GTCID, GTALM o GTALL */
     if (!this.data.SendTime && !["GTALC", "GTCID", "GTALM", "GTALL"].includes(this.event)) {
       if (!this.data.GPSUTCTime) {
-        this.error = 'Paquete sin SendTime de Gv300';
+        this.error = `Paquete sin SendTime de ${this.model}`;
         return;
       }
       else {
@@ -268,17 +271,17 @@ class Gv300 {
 
     if (event === "GTERI") {
       try {
-        ({ index, data } = Gv300.#specialCases(data, index, me));
+        ({ index, data } = Device.#specialCases(data, index, me));
       } catch (e) {
         console.log("Error en paquete GTERI");
         console.log(e);
         return parsed_data;
       }
     }
-    //Paquete con mas de 1 posicion gps de equipo GV300
+    //Paquete con mas de 1 posicion
     else if (event === "GTFRI" && data[6] !== "1") {
       try {
-        ({ index, data } = Gv300.#specialCases(data, index, me));
+        ({ index, data } = Device.#specialCases(data, index, me));
       } catch (e) {
         console.log("Error en paquete GTFRI con mas de una posición");
         console.log(e);
@@ -448,13 +451,13 @@ class Gv300 {
 
     switch (msg_type) {
       case "acknowledgment":
-        return Gv300.#parseAcknowledgement(data, socket_info, me);
+        return Device.#parseAcknowledgement(data, socket_info, me);
       case "report":
       case "buffer":
       case "config":
-        return Gv300.#parseReport(data, socket_info, me);
+        return Device.#parseReport(data, socket_info, me);
     }
   }
 }
 
-module.exports = Gv300;
+module.exports = Device;

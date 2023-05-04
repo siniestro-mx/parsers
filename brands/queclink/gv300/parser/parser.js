@@ -25,7 +25,7 @@ function parse(data, prop, i, event) {
       mi = parseInt(data[i].slice(10, 12), 10);
       s = parseInt(data[i].slice(12, 14), 10);
 
-      value = Date.UTC(y, m, d, h, mi, s, 0) / 1000;
+      value = Date.UTC(y, m, d, h, mi, s, 0);
 
       break;
     case "SerialNumber":
@@ -125,7 +125,7 @@ function parse(data, prop, i, event) {
       h = parseInt(data[i].slice(8, 10), 10);
       mi = parseInt(data[i].slice(10, 12), 10);
       s = parseInt(data[i].slice(12, 14), 10);
-      value = Date.UTC(y, m, d, h, mi, s, 0) / 1000;
+      value = Date.UTC(y, m, d, h, mi, s, 0);
       break;
     case "BackupBatteryPercentage":
       value = parseInt(data[i], 10);
@@ -287,7 +287,7 @@ function parse(data, prop, i, event) {
       h = parseInt(data[i].slice(8, 10), 10);
       mi = parseInt(data[i].slice(10, 12), 10);
       s = parseInt(data[i].slice(12, 14), 10);
-      value = Date.UTC(y, m, d, h, mi, s, 0) / 1000;
+      value = Date.UTC(y, m, d, h, mi, s, 0);
       break;
     case "EngineCoolantTemperature":
     case "DTCsClaredDistance":
