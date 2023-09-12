@@ -1,6 +1,8 @@
 const DEVICE_MODELS = require('./device_models.js');
 const parse = require('./parser.js');
 const device_index = require('./index.js');
+const event_descriptions = require('../../../../common/event-descriptions');
+const defaultConfig = require('./default_config.js');
 
 class Device {
   /*  se declaran las propiedades del objeto:
@@ -26,14 +28,13 @@ class Device {
   raw_data = null;
   error = null;
 
-  constructor(data, socket_info) {
+  constructor(data, socketInfo) {
     /*  el paquete que se recibe tiene el siguiente formato
     +RESP:GTFRI,060308,862894020601574,ZBT_CORPORACION,,10,1,1,0.0,0,1116.1,-103.437155,25.548303,20200923213604,0334,0020,0FBF,31DB,00,0.0,17756:02:35,,,0,210100,,,,20200923213610,20C3$
     como llega en Buffer, se convierte a string y este se convierte en el raw_data que luego guardaremos en la base de datos
     */
-   this.brand = socket_info.brand;
-   this.model = socket_info.model;
-
+    this.brand = socketInfo.brand;
+    
     this.raw_data = data.toString();
 
     /*  Para procesar el paquete, primero se utiliza la función split(',') para separar los diferentes valores del paquete en un array. 
@@ -47,7 +48,7 @@ class Device {
     /*  si el paquete es menor a 2 valores, lo ignoramos porque no es un paquete válido
     TODO: guardar el paquete y notificar que se recibió un paquete anomalo */
     if (data.length < 2) {
-      this.error = "Paquete incompleto";
+      this.error = "Paquete muy corto";
       return;
     }
 
@@ -55,11 +56,17 @@ class Device {
     obtenido del paquete no coincide con el esperado, ignorar paquete y notificar del error para que se asigne al puerto correcto */
     this.model = Device.#getModel(data[1]).toLowerCase();
 
-    if (this.model !== socket_info.model) {
+    if (this.model !== socketInfo.model) {
       this.error = "Modelo de dispositivo no coincide con el esperado";
       return;
     }
 
+    /* 
+    *  el msg_type puede ser del tipo
+    *  report: un paquete enviado automaticamente por la unidad, en base a la programación configurada
+    *  commandresponse: contestación al server, después de recibir un comando
+    *  buffer: paquete response, enviado fuera de tiempo por pérdida de conexión con el servidor
+    */
     this.msg_type = Device.#getMsgType(data[0]);
 
     if (!this.msg_type) {
@@ -72,14 +79,15 @@ class Device {
 
     /*  En el caso de la marca Queclink, se requiere conocer el modelo del equipo, el tipo de mensaje y el evento, para así, podre buscar 
     los indices de las propiedades para este paquete en particular. Si alguno de los datos falta, no se puede continuar y hay que detener el parseo */
-    if (!this.model || !this.event || !this.msg_type) {
+    if (!this.model || !this.event) {
       this.error = "No se pudieron obtener los parametros necesarios para continuar";
       return;
     }
 
     /*  se intenta hacer el parseo del paquete */
     try {
-      const parsed_data = Device.#parse(data, socket_info, this);
+      const parsed_data = Device.#parse(data, socketInfo, this);
+
       if (parsed_data && typeof parsed_data === 'object') {
         this.data = parsed_data;
       }
@@ -96,39 +104,31 @@ class Device {
 
     /* El campo SendTime es necesario, ya que los paquetes se guardan en orden cronológico segun los genera el equipo. Si un paquete no contiene este dato,
     se marca un error; a menos que sea un paquete GTALC, GTCID, GTALM o GTALL */
-    if (!this.data.SendTime && !["GTALC", "GTCID", "GTALM", "GTALL"].includes(this.event)) {
-      if (!this.data.GPSUTCTime) {
-        this.error = `Paquete sin SendTime de ${this.model}`;
-        return;
-      }
-      else {
-        this.data.SendTime = this.data.GPSUTCTime;
-        this.is_valid = true;
-      }
-    }
-    else {
-      this.is_valid = true;
-    }
-
+    this.is_valid = true;
+    
     /** si es un paquete que tenga coordenadas, ponemos la propiedad valid_position=true **/
     if (this.data.Latitude && this.data.Longitude) {
       this.valid_position = true;
     }
 
-    const received_at = socket_info.received_at;
+    const received_at = socketInfo.received_at;
+
     /*  esto es para ser compatible con la version de locanet frontend al dia 7 de abril del 2023, se removera en un futuro */
     this.data = {
       ...this.data,
-      received_at,
+      Alias: this.data.DeviceName || '',
+      ReceivedAt: received_at,
       MessageType: this.msg_type,
-      DeviceType: this.model,
       Model: this.model,
-      DeviceBrand: this.brand,
       Brand: this.brand,
-      Event: this.event,
-      is_valid: this.is_valid,
-      valid_position: this.valid_position
+      Event: event_descriptions[this.event] || this.event,
+      EventCode: this.event,
+      IsValid: this.is_valid,
+      ValidPosition: this.valid_position
     };
+
+    /*  si el paquete es un paquete de reporte, borramos el campo de DeviceName */
+    delete this.data.DeviceName;
   }
 
   getMsgType() {
@@ -163,6 +163,10 @@ class Device {
     return this.data;
   }
 
+  setDefaultConfig(socketInfo) {
+    const socket = socketInfo.socket;
+  }
+
   static getIdFromRawData(data) {
     let id = data.toString().split(',');
 
@@ -179,8 +183,7 @@ class Device {
     const msgtype = raw_msg_type.split(':')[0];
 
     const msg_type_map = {
-      'AT+GT': 'command',
-      '+ACK': 'acknowledgment',
+      '+ACK': 'commandresponse',
       '+RESP': 'report',
       '+BUFF': 'buffer'
     };
@@ -236,7 +239,7 @@ class Device {
     return model || null;
   }
 
-  static #parseAcknowledgement(data, socket_info, me) {
+  static #parseCommandResponse(data, socketInfo, me) {
     const event = me.event;
     const index = JSON.parse(JSON.stringify(device_index.acknowledgment[event]));
 
@@ -254,7 +257,7 @@ class Device {
     }
 
     for (let prop in parsed_data) {
-      if (parsed_data[prop] == null) delete parsed_data[prop];
+      if (parsed_data[prop] === null) delete parsed_data[prop];
     }
 
     if ((Object.keys(parsed_data).length === 0) || !parsed_data.UniqueID || !parsed_data.SendTime) parsed_data.valid = false;
@@ -262,9 +265,9 @@ class Device {
     return parsed_data;
   }
 
-  static #parseReport(data, socket_info, me) {
+  static #parseReport(data, socketInfo, me) {
     const event = me.event;
-    let index = JSON.parse(JSON.stringify(device_index.report[event]));
+    let index = structuredClone(device_index.report[event]);
     let parsed_data = { valid: false };
 
     //Paquete con sensor de temperatura o gasolina
@@ -446,16 +449,16 @@ class Device {
     return { index, data };
   }
 
-  static #parse(data, socket_info, me) {
+  static #parse(data, socketInfo, me) {
     const msg_type = me.msg_type;
 
     switch (msg_type) {
-      case "acknowledgment":
-        return Device.#parseAcknowledgement(data, socket_info, me);
+      case "commandresponse":
+        return Device.#parseCommandResponse(data, socketInfo, me);
       case "report":
       case "buffer":
       case "config":
-        return Device.#parseReport(data, socket_info, me);
+        return Device.#parseReport(data, socketInfo, me);
     }
   }
 }

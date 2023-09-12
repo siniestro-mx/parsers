@@ -1,14 +1,13 @@
 const mongoose = require('mongoose');
 const schemaObject = {
   ProtocolVersion: {
-    type: Number,
-    required: true
+    type: Number
   },
   UniqueID: {
     type: String,
     required: true
   },
-  DeviceName: {
+  Alias: {
     type: String,
   },
   SendTime: {
@@ -19,23 +18,26 @@ const schemaObject = {
     type: Number,
     required: true
   },
-  ReportIDAndType: {
-    type: String,
-  },
   Latitude: {
     type: Number,
+    min: -90,
+    max: 90
   },
   Longitude: {
     type: Number,
+    min: -180,
+    max: 180
   },
   Altitude: {
     type: Number,
   },
   Speed: {
-    type: Number,
+    type: Number
   },
   Azimuth: {
     type: Number,
+    min: 0,
+    max: 360
   },
   Mileage: {
     type: Number,
@@ -49,38 +51,33 @@ const schemaObject = {
   IOStatus: {
     type: String,
   },
-  DeviceStatus: {
-    type: String,
-  },
   BackupBatteryPercentage: {
     type: Number,
+    max: 100
   },
   MCC: {
-    type: String,
+    type: String
   },
   MNC: {
-    type: String,
+    type: String
   },
   LAC: {
-    type: String,
+    type: String
   },
   CellID: {
-    type: String,
+    type: String
   },
   HourMeterCount: {
     type: Number,
   },
-  valid: {
-    type: Boolean,
-  },
-  received_at: {
-    type: Number,
+  ReceivedAt: {
+    type: Date,
   },
   Engine: {
-    type: String,
+    type: Boolean,
   },
   EngineLock: {
-    type: String,
+    type: Boolean,
   },
   Address: {
     type: String,
@@ -97,34 +94,53 @@ const schemaObject = {
   MessageType: {
     type: String,
   },
-  DeviceType: {
+  Model: {
     type: String,
+    required: true
   },
-  DeviceBrand: {
+  Brand: {
     type: String,
+    required: true
   },
   Event: {
     type: String,
+    required: true
   },
-  is_valid: {
+  IsValid: {
     type: Boolean,
+    required: true
   },
-  valid_position: {
+  ValidPosition: {
     type: Boolean,
+    required: true
   }
 };
+
 const HistorySchema = new mongoose.Schema(schemaObject, {
   timestamps: false,
   collection: "gpsHistories",
   timeseries: {
     timeField: "SendTime",
-    metaField: null, // Opcional: especifica el campo de metadatos si es necesario
-    granularity: "seconds", // Opcional: segundos, minutos, horas, etc.
+    metaField: null,
+    granularity: "seconds",
   },
   strict: false
 });
 
-const CacheSchema = new mongoose.Schema(schemaObject, {
+const CacheSchema = new mongoose.Schema(Object.assign({
+  Position: {
+    type: {
+      type: String,
+      enum: ['Point']
+    },
+    coordinates: {
+      type: [Number]
+    }
+  },
+  Overlays: {
+    type: Array
+  },
+}, schemaObject), {
   timestamps: false,
   collection: "unitsCache",
   strict: false

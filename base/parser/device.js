@@ -89,7 +89,7 @@ class Device {
     }
 
     /*  si el paquete no es válido, se detiene el parseo */
-    if (!this.data.valid) {
+    if (!this.data.Valid) {
       this.error = `Error en paquete ${this.model}`;
       return;
     }
@@ -119,15 +119,13 @@ class Device {
     /*  esto es para ser compatible con la version de locanet frontend al dia 7 de abril del 2023, se removera en un futuro */
     this.data = {
       ...this.data,
-      received_at,
+      ReceivedAt: received_at,
       MessageType: this.msg_type,
-      DeviceType: this.model,
       Model: this.model,
-      DeviceBrand: this.brand,
       Brand: this.brand,
       Event: this.event,
-      is_valid: this.is_valid,
-      valid_position: this.valid_position
+      IsValid: this.is_valid,
+      ValidPosition: this.valid_position
     };
   }
 

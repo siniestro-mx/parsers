@@ -1,5 +1,5 @@
 const gv300 = {
-  "acknowledgment": {
+  "commandresponse": {
     "GTBSI": {
       "ProtocolVersion": 1,
       "UniqueID": 2,
@@ -52,10 +52,10 @@ const gv300 = {
       "ProtocolVersion": 1,
       "UniqueID": 2,
       "DeviceName": 3,
+      "IOBID": 4,
       "SerialNumber": 5,
       "SendTime": 6,
-      "CountNumber": 7,
-      "IOBID": 4
+      "CountNumber": 7
     },
     "GTEPS": {
       "ProtocolVersion": 1,

@@ -2,10 +2,10 @@
 module.exports = {
     devices: [
       {
-        brand: 'queclink',
-        model: 'gv300',
-        protocol: 'udp',
-        port: 5500,
+        brand: 'marca',
+        model: 'modelo',
+        protocol: 'protocolo',
+        port: 'puerto',
       },
     ],
   };
