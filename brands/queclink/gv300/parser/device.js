@@ -34,7 +34,7 @@ class Device {
     como llega en Buffer, se convierte a string y este se convierte en el raw_data que luego guardaremos en la base de datos
     */
     this.brand = socketInfo.brand;
-    
+
     this.raw_data = data.toString();
 
     /*  Para procesar el paquete, primero se utiliza la función split(',') para separar los diferentes valores del paquete en un array. 
@@ -105,10 +105,23 @@ class Device {
     /* El campo SendTime es necesario, ya que los paquetes se guardan en orden cronológico segun los genera el equipo. Si un paquete no contiene este dato,
     se marca un error; a menos que sea un paquete GTALC, GTCID, GTALM o GTALL */
     this.is_valid = true;
-    
+
     /** si es un paquete que tenga coordenadas, ponemos la propiedad valid_position=true **/
-    if (this.data.Latitude && this.data.Longitude) {
+    if (Number.isFinite(this.data.Latitude) && Number.isFinite(this.data.Longitude)) {
       this.valid_position = true;
+      this.data.Position = {
+        type: 'Point',
+        coordinates: [this.data.Longitude, this.data.Latitude]
+      };
+    }
+
+    /** agregamos el estado de la ignicion y del bloqueo de motor en base a las entradas y salidas leidas en el paquete si es que las hubo  */
+    if(this.data.Inputs){
+      this.data.Engine = this.data.Inputs.charAt(3) === "1" ? true : false;
+    }
+
+    if(this.data.Outputs){
+      this.data.EngineLock = this.data.Outputs.charAt(2) === "1" ? true : false;
     }
 
     const received_at = socketInfo.received_at;
@@ -124,7 +137,8 @@ class Device {
       Event: event_descriptions[this.event] || this.event,
       EventCode: this.event,
       IsValid: this.is_valid,
-      ValidPosition: this.valid_position
+      ValidPosition: this.valid_position,
+      RawData: this.raw_data,
     };
 
     /*  si el paquete es un paquete de reporte, borramos el campo de DeviceName */
@@ -148,7 +162,7 @@ class Device {
   }
 
   hasValidPosition() {
-    return this.valid_position;
+    return this.valid_position && this.data.Latitude && this.data.Longitude;
   }
 
   isValid() {

@@ -2,8 +2,10 @@ require('dotenv').config();
 const http = require('http');
 const dgram = require('dgram');
 const net = require('net');
+const axios = require('axios');
 const { devices } = require('./config');
-const { HistoryModel, CacheModel } = require('./model');
+const mongoose = require('mongoose');
+const { CacheModel, Overlay } = require('./model');
 const Device = require('./parser/device');
 const { connectToMongoDB } = require('../../../common/dbConnection');
 const { Server } = require('socket.io');
@@ -11,28 +13,43 @@ const server = http.createServer();
 const io = new Server(server);
 const WEBSOCKET_HOST = '10.132.166.214';
 const WEBSOCKET_PORT = 3666;
+let QUEUE = [];
 
 (async () => {
+  /** conectamos a la base de datos donde se guardara tanto el cache como el historial */
   await connectToMongoDB();
 
+  /*io.on('connection', (socket) => {
+    console.log('a user connected');
+    console.dir(socket.handshake.query);
+    console.dir(socket.handshake);
+  });*/
+  /** Iniciamos el server de socket.io con el que se estará comunicando con otros microservicios del sistema */
   server.listen(WEBSOCKET_PORT, WEBSOCKET_HOST, () => {
     console.log(`Servidor websockets en el puerto ${WEBSOCKET_PORT} ip ${WEBSOCKET_HOST}`);
   });
 
+  /** para cada dispositivo configurado creamos un socket de red http o udp, para escuchar por paquetes del dispositivo gps */
   devices.forEach((device) => {
     createServerForDevice(device);
   });
 
   setInterval(() => {
     saveQueueToDb();
-  }, 60000);
+  }, 2000);
 })();
+
+// Función optimizada para manejar errores
+async function handleError(error, message) {
+  console.error(`${message}: ${error.message}`);
+  // Considera agregar un sistema de log más robusto aquí
+}
 
 function createServerForDevice(device) {
   if (device.protocol === 'udp') {
     const udpServer = dgram.createSocket('udp4');
 
-    udpServer.on('message', (gpsdata, rinfo) => {
+    udpServer.on('message', async (gpsdata, rinfo) => {
       const socketInfo = {
         name: `${device.brand}-${device.model}`,
         type: device.protocol,
@@ -44,9 +61,10 @@ function createServerForDevice(device) {
       };
 
       try {
-        processAndSaveGPSData(gpsdata, socketInfo, device);
+        await processAndSaveGPSData(gpsdata, socketInfo, device);
       }
       catch (err) {
+        console.log('Error al procesar los datos del GPS por UDP');
         console.dir(err);
       }
     });
@@ -66,8 +84,14 @@ function createServerForDevice(device) {
         received_at: Date.now(),
       };
 
-      socket.on('data', (gpsdata) => {
-        processAndSaveGPSData(gpsdata, socketInfo, device);
+      socket.on('data', async (gpsdata) => {
+        try {
+          await processAndSaveGPSData(gpsdata, socketInfo, device);
+        }
+        catch (err) {
+          console.log('Error al procesar los datos del GPS por TCP');
+          console.dir(err);
+        }
       });
     });
 
@@ -90,8 +114,6 @@ async function processAndSaveGPSData(gpsdata, socketInfo, device) {
     throw error;
   }
 
-  let cacheData = await getCacheData(uniqueId);
-
   const gps = new Device(gpsdata, socketInfo);
 
   if (!gps.isValid()) {
@@ -101,19 +123,19 @@ async function processAndSaveGPSData(gpsdata, socketInfo, device) {
     throw error;
   }
 
+  let cacheData = await getCacheData(uniqueId);
+
   try {
-    const newData = gps.getData();
-    const unitId = newData.UniqueID;
-    const msgType = newData.MessageType;
+    const msgType = gps.getMsgType();
 
     if (msgType === 'report') {
-      processReport(newData, cacheData, device);
+      await processReport(gps, cacheData, device);
     }
     else if (msgType === 'buffer') {
-      queueSaveData(gps);
+      //queueSaveData(gps);
     }
     else if (msgType === 'commandresponse') {
-      var sequence = gps.data.SerialNumber,
+      /*var sequence = gps.data.SerialNumber,
         uniqueid = gps.data.UniqueID,
         cmd_id,
         response_data = {
@@ -186,120 +208,149 @@ async function processAndSaveGPSData(gpsdata, socketInfo, device) {
         }
       }
       updateNetworkInfo(gps, ip, port, received_at);
-      trySendCommand(gps, false, false, false, false);
+      trySendCommand(gps, false, false, false, false);*/
     }
     else if (msgType === 'configuration') {
       //console.log("Configuracion de " + gps.data.UniqueID + " recibida con fecha " + new Date(gps.data.SendTime * 1000).toString());
       //console.log(prettyjson.render(gps));
-      updateNetworkInfo(gps, ip, port, received_at);
-      saveUnits(id);
-      pushData(gps);
+      //updateNetworkInfo(gps, ip, port, received_at);
+      //saveUnits(id);
+      //pushData(gps);
     }
   } catch (e) {
-    console.log('Error al procesar los datos del GPS');
-    console.error(e);
+    throw e;
   }
 }
 
 async function getCacheData(uniqueId) {
-  let cacheData = null;
-
-  /** Buscamos en la base si tenemos ya información de este dispositivo, en caso de no encontrarlo, significa que es un dispositivo nuevo,
-  *   asi que creamos un nuevo objeto cache para el dispositivo y lo retornamos.
-    */
-  cacheData = await CacheModel.findOne({ UniqueID: uniqueId });
-
-  /** Configuración inicial del cache con default del sensor de ignición y paro de motor */
-  if (!cacheData) {
-    cacheData = {
-      IOConfig: {
-        Engine: 3,
-        EngineLock: 1
-      }
-    };
-  }
-
-  /** Configuración default del sensor de ignición y paro de motor */
-  if (!cacheData.IOConfig) {
-    cacheData.IOConfig = {
-      Engine: 3,
-      EngineLock: 1
-    };
-  }
-
-  return cacheData;
-}
-
-async function processReport(newData, cacheData, device) {
-  /*  si la unidad esta en movimiento */
-  newData.AddressInfo = await getAddress(newData, cacheData);
-  
-  pushData(newData);
-  queueSaveData(gps);
-  //Checamos si se activo alguna alerta
-  checkForAlert(gps);
-}
-
-async function getAddress(newData, cacheData) {
-  if(!cacheData.AddressInfo || needAddressUpdate(newData, cacheData)) {
-    const address = await getAddressFromGeocoder(newData);
-    return address;
-  }else{
-    return cacheData.AddressInfo;
+  try {
+    let cacheData = await CacheModel.findOne({ UniqueID: uniqueId });
+    return cacheData || { Timestamps: {} }; // Simplificación del retorno y creación de cacheData
+  } catch (e) {
+    await handleError(e, `Error al buscar el cache de datos para la unidad ${uniqueId}`);
+    return undefined;
   }
 }
 
-async function getAddressFromGeocoder(newData) {
-  /*let id = unit.getId(),
-    lat = unit.data.Latitude,
-    lng = unit.data.Longitude;
+async function processReport(gps, cacheData, device) {
+  /** dependiendo de si el paquete contiene coordenadas o no, y si estas son diferentes
+   *  a las que tenemos en el cache, solicitamos la dirección de la unidad o utilizamos
+   *  la que tenemos en el cache
+   */
+  const movedStatus = hasMoved(gps, cacheData);
+  const addressInfo = await getAddress(gps, cacheData, movedStatus);
 
-  axios.get(`http://10.132.166.211/reverse.php?format=json&lat=${lat}&lon=${lng}&zoom=16&namedetails=1`).then((res) => {
+  /** puede darse el caso que el paquete no contenga coordenadas y tampoco se cuente con
+   *  información en el cache, en cuyo caso se envia un paquete vacio, sin dirección.
+   *  En un funcionamiento normal esto no pasaria salvo cuando una unidad comienza a reportar
+   *  por primera vez en la historia del sistema, o cuando ocurre un error que impide obtener
+   *  el cache de datos de la unidad.
+   */
+  if (addressInfo) {
+    gps.data.AddressInfo = addressInfo;
+  }
+  else if (gps.hasValidPosition()) {
+    gps.data.AddressInfo = "No se pudo encontrar la dirección";
+  }
+
+  /** agregamos el paquete a la cola de guardado */
+  queueForSave(gps);
+
+  //console.log(`Checando geocercas para la unidad ${gps.data.UniqueID} con posicion ${gps.hasValidPosition() ? 'valida' : 'invalida'}`);
+  /** verificamos el status de la unidad dentro de las geocercas que tenga asignadas, si es que tiene */
+  const overlays = await checkForGeofences(gps, cacheData, movedStatus);
+
+  //console.log(`Overlays(process report): ${overlays}`);
+  if (overlays) {
+    //console.log(`Overlays encontradas: ${typeof overlays} - ${overlays}`);
+    gps.data.Overlays = overlays;
+    //console.log(`Overlays: ${gps.data.Overlays}`);
+  }
+  else {
+    //console.log(`No se encontraron overlays para la unidad ${gps.data.UniqueID}`);
+  }
+  /** enviamos el paquete a los clientes conectados a traves de socket.io */
+  pushData(gps);
+
+  await updateCache(gps.data, cacheData, device);
+}
+
+async function getAddress(gps, cacheData, movedStatus) {
+  /** si el paquete no contiene coordenadas, intentamos enviar la última dirección conocida si es que la hay, 
+   *  si el paquete contiene coordenadas, intentamos obtener la dirección de la unidad, solo si es necesario
+   *  de lo contrario, retornamos la dirección que tenemos en el cache
+   */
+  if (!gps.hasValidPosition()) return null;
+
+  if (movedStatus || !cacheData?.AddressInfo) {
+    try {
+      const address = await getAddressFromGeocoder(gps);
+      return address;
+    } catch (e) {
+      /** si ocurre un error en el servidor que se encarga de la geocodificación inversa, enviamos la información
+       *  de dirección que tenemos en el cache, si es que la hay
+       */
+      console.log(`Error al obtener la dirección de la unidad ${newData.UniqueID}`);
+      console.error(e);
+      return null;
+    }
+  } else {
+    return cacheData?.AddressInfo;
+  }
+}
+
+async function getAddressFromGeocoder(gps) {
+  const lat = gps.data.Latitude;
+  const lng = gps.data.Longitude;
+  let addressInfo = null;
+
+  try {
+    const res = await axios.get(`http://10.132.72.71/reverse.php?format=json&lat=${lat}&lon=${lng}&zoom=16&namedetails=1`);
+
     if (res.data && res.data.address) {
-      unit.data.Address = `${res.data.address.road ? res.data.address.road + ', ' : ''}${res.data.address.neighbourhood ? 'Col.' + res.data.address.neighbourhood + ', ' : ''} ${res.data.address.city || res.data.address.county},${res.data.address.state},${res.data.address.country}`;
-      unit.data.City = res.data.address.city;
-      unit.data.State = res.data.address.state;
-      unit.data.Country = res.data.address.country;
-      if (UNITS[id]) {
-        UNITS[id].lastLocation = UNITS[id].lastLocation || {};
-        UNITS[id].lastLocation.address = unit.data.Address;
-        UNITS[id].lastLocation.city = unit.data.City;
-        UNITS[id].lastLocation.state = unit.data.State;
-        UNITS[id].lastLocation.country = unit.data.Country;
-        UNITS[id].lastLocation.lat = unit.data.Latitude;
-        UNITS[id].lastLocation.lng = unit.data.Longitude;
-      }
-      callback(null);
+      addressInfo = {
+        Address: `${res.data.address.road ? res.data.address.road + ', ' : ''}${res.data.address.neighbourhood ? 'Col.' + res.data.address.neighbourhood + ', ' : ''} ${res.data.address.city || res.data.address.county},${res.data.address.state},${res.data.address.country}`,
+        City: res.data.address.city,
+        State: res.data.address.state,
+        Country: res.data.address.country
+      };
+      //console.dir(addressInfo);
     }
     else {
-      //console.log(`No se enccontró direccion ${JSON.stringify(res.data)}`);
-      callback('No se encontró');
+      console.log(`No se enccontró direccion ${JSON.stringify(res.data)}`);
     }
-  }).catch((err) => {
-    callback('Error al hacer peticion HTTP solicitando dirección Nominatim');
-  });*/
+
+  } catch (err) {
+    throw err;
+  };
+
+  return addressInfo;
 }
 
-function needAddressUpdate(newData, cacheData) {
-  
+function hasMoved(gps, cacheData) {
+  if (!gps.hasValidPosition()) return false;
+  /** si el cache tiene dirección comparamos las latitudes y longitudes, si son iguales, no solicitamos
+   * una nueva dirección, si son diferentes, solicitamos una nueva dirección, a menos que
+   * a ignición este apagada y la velocidad sea menor a 1 km/h.
+   */
+  if ((cacheData?.Latitude === gps.data.Latitude) && (cacheData?.Longitude === gps.data.Longitude)) {
+    return false;
+  } else if (gps.data.Engine === false && Number.isFinite(gps.data.Speed) && gps.data.Speed <= 1) {
+    return false;
+  }
+
+  return true;
 }
 
-function pushData(gpsdata) {
-
+function pushData(gps) {
+  // Emitir los datos GPS a través de Socket.IO
+  io.emit('gpsdata', gps.getData());
 }
 
 async function updateCache(newData, cacheData, device) {
-  if (cacheData && cacheData.Timestamps) {
-    for (const key in newData) {
-      cacheData.Timestamps[key] = Date.now();
-    }
-  } else {
-    const newTimestamps = {};
-    for (const key in newData) {
-      newTimestamps[key] = Date.now();
-    }
-    newData.Timestamps = newTimestamps;
-  }
+  const unitId = newData.UniqueID;
+
+  if (!cacheData || !unitId) return;
 
   /* 
   *  aqui actualizamos las propiedades que llegaron en el paquete nuevo, solo se crearan o sobreescribiran
@@ -307,80 +358,224 @@ async function updateCache(newData, cacheData, device) {
   *  intactas, con eso tenemos un valor para todas las propiedades que en general envia el dispositivo, aunque no
   *  todas actualizadas a la misma fecha, algunas seran mas recientes que otras, pero al menos hay un valor, el ultimo recibido
   */
-  const updateData = {
-    ...newData,
-    Timestamps: cacheData ? cacheData.Timestamps : newData.Timestamps,
-  };
+  for (const key in newData) {
+    cacheData[key] = newData[key];
+    cacheData.Timestamps[key] = Date.now();
+  }
 
   /* 
   *  si el paquete contiene una posición valida, creamos un geoJSON tipo Point, con la posición, para poder utilizar
   *  esta propiedad en las consultas geoespaciales que se realizan para determinar si una unidad esta dentro de alguna geocerca 
   */
   if (newData.ValidPosition && newData.Latitude && newData.Longitude) {
-    updateData.Position = {
+    cacheData.Position = {
       type: 'Point',
       coordinates: [newData.Longitude, newData.Latitude]
     };
 
-    updateData.Timestamps.Position = Date.now();
-
-
-    checkForGeofences(newData);
+    cacheData.Timestamps.Position = Date.now();
   }
 
   try {
-    await Promise.all([
-      m_gpsdata.save(),
-      CacheModel.findOneAndUpdate(
-        { UniqueID: unitId },
-        { $set: updateData },
-        { upsert: true, new: true }
-      ),
-    ]);
-
-    // Emitir los datos GPS a través de Socket.IO
-    io.emit('gpsdata', gpsdata);
+    await CacheModel.findOneAndUpdate(
+      { UniqueID: unitId },
+      { $set: cacheData },
+      { upsert: true, new: true }
+    );
   } catch (error) {
     console.error(`Error saving data to MongoDB for ${device.brand} ${device.model}, ${error.message}}`);
-    console.log(gpsdata);
+    console.error(cacheData.RawData);
+    console.error(cacheData);
   }
 }
 
-async function queueForSave(newData, device) {
+async function queueForSave(gps) {
+  let data = gps.getData();
 
+  data = structuredClone(data);
+
+  //console.log("Agregando datos a la cola de guardado");
+
+  QUEUE.push(data);
 }
 
 async function saveQueueToDb() {
+  if (QUEUE.length === 0) return;
+
+  const locanet = mongoose.connection.useDb('locanet');
+  const gpsHistories = locanet.collection('gpsHistories');
+
+  //console.log("Guardando datos en la base de datos");
+
+  const data = QUEUE.splice(0, QUEUE.length);
+
+  try {
+    const res = await gpsHistories.insertMany(data);
+    //console.log(`Se guardaron ${res.insertedCount} paquetes en la base de datos`);
+  } catch (error) {
+    console.error(`Error saving data to MongoDB, ${error.message}}`);
+    console.error(data);
+    QUEUE = data.concat(QUEUE);
+  }
 }
-/*async function checkAndUpdateOverlays(gpsdata) {
-  const uniqueID = gpsdata.UniqueID;
-  const lat = gpsdata.Latitude;
-  const lng = gpsdata.Longitude;
-  const point = { type: "Point", coordinates: [lng, lat] }; // reemplace con las coordenadas GPS del dispositivo
-  const toleranceInMeters = 5000; // reemplace con la tolerancia en metros
 
-  console.log(`Buscando overlays para el vehículo ${uniqueID}${gpsdata.Alias ? ("-" + gpsdata.Alias) : ""} en las coordenadas ${lat}, ${lng}`);
+async function checkForGeofences(gps, cacheData, movedStatus) {
+  if (!gps.hasValidPosition()) return null;
 
-  let overlaysWithUnitPointOrCircleType = await Overlay.find({
-    type: { $in: ["marker", "circle"] }, // Filtrar overlays de tipo Point o Circle
-    vehicles: { $in: [uniqueID] }, // reemplace con el UniqueID del dispositivo
-    overlay: {
-      $near: {
-        $geometry: point,
-        $maxDistance: toleranceInMeters
+  const uniqueID = gps.data.UniqueID;
+  const lat = gps.data.Latitude;
+  const lng = gps.data.Longitude;
+  const point = { type: "Point", coordinates: [lng, lat] };
+  const toleranceInMeters = 5000;
+
+  if (!cacheData?.Overlays || movedStatus) {
+    try {
+      console.log(cacheData?.Overlays ? `La unidad ${gps.data.Alias || uniqueID} se ha movido, buscando geocercas` : `No hay datos de geocercas en el caché para ${gps.data.Alias || uniqueID}, buscando geocercas`);
+      // Obtener las nuevas geocercas
+      const overlays = await getOverlays(uniqueID, point, toleranceInMeters);
+
+      //console.log(`Overlays encontrados para el vehículo ${uniqueID}${gps.data.Alias ? ("-" + gps.data.Alias) : ""}: ${overlays.length} - ${overlays}`);
+
+      // Comparar las nuevas geocercas con las antiguas
+      const { addedOverlaysIds, removedOverlaysIds } = compareOverlays(overlays, cacheData?.Overlays || []);
+
+      //console.log(`Geocercas añadidas (checkForGeofences): ${addedOverlaysIds}`);
+      //console.log(`Geocercas removidas (checkForGeofences): ${removedOverlaysIds}`);
+
+      try {
+        // Si hay cambios, actualizar la base de datos
+        if (addedOverlaysIds.length > 0 || removedOverlaysIds.length > 0) {
+          await updateDatabase(uniqueID, addedOverlaysIds, removedOverlaysIds);
+
+          /** si hay addedOverlays enviamos un mensaje de entered.overlay y 
+           *  si hay removedOverlays enviamos un mensaje de exited.overlay
+           */
+          if (addedOverlaysIds.length > 0) {
+            console.log(`La unidad ${gps.data.Alias || uniqueID} ha entrado a las geocercas ${addedOverlaysIds}`);
+            io.emit('entered.overlays', uniqueId, addedOverlaysIds);
+          }
+
+          if (removedOverlaysIds.length > 0) {
+            console.log(`La unidad ${gps.data.Alias || uniqueID} ha salido de las geocercas ${removedOverlaysIds}`);
+            io.emit('exited.overlays', uniqueId, removedOverlaysIds);
+          }
+        }
       }
+      catch (error) {
+        console.log(`Ya se cago este pedo ${error}`);
+        //await handleError(error, `Error al actualizar la base de datos para la unidad ${uniqueID}`);
+        return;
+      }
+
+      //console.log(`Overlays (checkForGeofences) ${overlays}`);
+      return overlays;
     }
-  });
+    catch (error) {
+      await handleError(error, `Error al buscar geocercas para la unidad ${uniqueID}`);
+      return;
+    }
+  }
+  else {
+    // Si la unidad no se ha movido y hay datos de geocercas en el caché, 
+    // asignamos los datos del caché a gps.Overlays y salimos de la función.
+    console.log(`La unidad ${gps.data.Alias || uniqueID} NO se ha movido, asignando datos de geocercas del caché ${cacheData.Overlays}`);
+    return cacheData.Overlays;
+  }
+}
 
-  console.log(`resultado de buscar en marker y circle`);
-  console.log(util.inspect(overlaysWithUnitPointOrCircleType, false, null, true));
+async function getOverlays(uniqueID, point, toleranceInMeters) {
+  const [pointOrCircleOverlays, otherTypeOverlays] = await Promise.all([
+    findPointOrCircleOverlays(uniqueID, point, toleranceInMeters),
+    findOtherTypeOverlays(uniqueID, point)
+  ]);
 
-  let overlaysWithUnitOtherTypes = await Overlay.find({
-    type: { $nin: ["marker", "circle"] }, // Excluir overlays de tipo Point y Circle
-    vehicles: { $in: [uniqueID] }, // reemplace con el UniqueID del dispositivo
-    overlay: { $geoIntersects: { $geometry: point } }
-  });
+  const overlays = pointOrCircleOverlays.concat(otherTypeOverlays).map(overlay => overlay._id.toString());
 
-  console.log(`resultado de buscar en polygon, rectangle y polyline`);
-  console.log(util.inspect(overlaysWithUnitOtherTypes, false, null, true));
-} */
+  return overlays;
+}
+
+async function findPointOrCircleOverlays(uniqueID, point, toleranceInMeters) {
+  try {
+    return await Overlay.find({
+      type: { $in: ["marker", "circle"] },
+      vehicles: { $in: [uniqueID] },
+      overlay: {
+        $near: {
+          $geometry: point,
+          $maxDistance: toleranceInMeters
+        }
+      }
+    }).lean();
+  } catch (error) {
+    console.log(`Error al buscar geocercas para la unidad ${uniqueID}`);
+    console.log(error);
+
+    return [];
+  }
+}
+
+async function findOtherTypeOverlays(uniqueID, point) {
+  try {
+    return await Overlay.find({
+      type: { $nin: ["marker", "circle"] },
+      vehicles: { $in: [uniqueID] },
+      overlay: { $geoIntersects: { $geometry: point } }
+    }).lean();
+  } catch (error) {
+    console.log(`Error al buscar geocercas para la unidad ${uniqueID}`);
+    console.log(error);
+
+    return [];
+  }
+}
+
+function compareOverlays(overlays, oldOverlays) {
+  //console.log("Comparando geocercas");
+  //console.dir(overlays);
+  //console.dir(oldOverlays);
+  try {
+    const addedOverlaysIds = overlays.filter(overlay => !oldOverlays.includes(overlay));
+    const removedOverlaysIds = oldOverlays.filter(overlay => !overlays.includes(overlay));
+    //console.log("Termine de comparar geocercas");
+    //console.log("Geocercas añadidas (compareOverlays)");
+    //console.dir(addedOverlaysIds);
+    //console.log("Geocercas removidas (compareOverlays)");
+    //console.dir(removedOverlaysIds);
+    return { addedOverlaysIds, removedOverlaysIds };
+  }
+  catch (e) {
+    console.log("Error al comparar geocercas");
+    console.dir(e);
+    return { addedOverlays: [], removedOverlays: [] };
+  }
+}
+
+async function updateDatabase(uniqueID, addedOverlays, removedOverlays) {
+  // Crear operaciones en lote para actualizar las colecciones
+  const bulkOps = [];
+
+  // Agregar operaciones para añadir la unidad a las nuevas geocercas
+  for (const overlay of addedOverlays) {
+    bulkOps.push({
+      updateOne: {
+        filter: { _id: overlay },
+        update: { $addToSet: { unitsInOverlay: uniqueID } },
+      },
+    });
+  }
+
+  // Agregar operaciones para eliminar la unidad de las geocercas antiguas
+  for (const overlay of removedOverlays) {
+    bulkOps.push({
+      updateOne: {
+        filter: { _id: overlay },
+        update: { $pull: { unitsInOverlay: uniqueID } },
+      },
+    });
+  }
+
+  // Ejecutar las operaciones en lote
+  //console.log("Actualizando overlays en la base");
+  await Overlay.bulkWrite(bulkOps);
+  //console.log("Overlays actualizados");
+}

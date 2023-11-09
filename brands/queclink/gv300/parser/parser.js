@@ -130,31 +130,47 @@ function parse(data, prop, i, event, opts) {
     case "BackupBatteryPercentage":
       value = parseInt(data[i], 10);
       break;
-    case "IOStatus":
-      let inputs = parseInt(data[i].slice(2, 4), 16).toString(2);
-      let outputs = parseInt(data[i].slice(4, 6), 16).toString(2);
+    case "Inputs":
+      let inputs;
+
+      if (event === 'GTINF' || event === 'GTIOS') {
+        inputs = data[i];
+      }
+      else {
+        inputs = data[i].slice(2, 4);
+      }
+
+      inputs = parseInt(inputs, 16).toString(2);
 
       while (inputs.length < 4) {
         inputs = "0" + inputs;
+      }
+
+      value = inputs;
+
+      break;
+    case "Outputs":
+      let outputs;
+
+      if (event === 'GTINF' || event === 'GTIOS') {
+        outputs = data[i];
+      }
+      else {
+        outputs = parseInt(data[i].slice(4, 6), 16).toString(2);
       }
 
       while (outputs.length < 3) {
         outputs = "0" + outputs;
       }
 
-      if (data[1].slice(0, 2) === '3C' || data[1].slice(0, 2) === '41' || data[1].slice(0, 2) === '0F') {
-        value = inputs + ',' + outputs + ',' + inputs.charAt(3) + ',' + outputs.charAt(1);
-      }
-      else {
-        value = inputs + ',' + outputs + ',' + inputs.charAt(3) + ',' + outputs.charAt(0);
-      }
-
+      value = outputs;
+      
       break;
     case "DeviceStatus":
-      if (event == "GTFRI" || event == "GTERI") {
+      if (event === 'GTFRI' || event === 'GTERI') {
         value = data[i].slice(0, 2);
       }
-      else if (event == "GTSTT") {
+      else if (event == "GTSTT" || event === 'GTGSS') {
         value = data[i];
       }
       break;
