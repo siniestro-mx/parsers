@@ -103,6 +103,13 @@ function createServerForDevice(device) {
   }
 }
 
+/**
+ * Processes and saves GPS data for a Queclink GV300 device.
+ * @param {Buffer} gpsdata - The raw GPS data received from the device.
+ * @param {Object} socketInfo - Information about the socket connection.
+ * @param {Object} device - Information about the device.
+ * @throws {Error} If the ID of the unit cannot be obtained or the package is not interpretable.
+ */
 async function processAndSaveGPSData(gpsdata, socketInfo, device) {
   const uniqueId = Device.getIdFromRawData(gpsdata);
 
@@ -445,7 +452,7 @@ async function checkForGeofences(gps, cacheData, movedStatus) {
       try {
         // Si hay cambios, actualizar la base de datos
         if (addedOverlaysIds.length > 0 || removedOverlaysIds.length > 0) {
-          await updateDatabase(uniqueID, addedOverlaysIds, removedOverlaysIds);
+          await addAndRemoveUnitsFromOverlayInDatabase(uniqueID, addedOverlaysIds, removedOverlaysIds);
 
           /** si hay addedOverlays enviamos un mensaje de entered.overlay y 
            *  si hay removedOverlays enviamos un mensaje de exited.overlay
@@ -550,7 +557,24 @@ function compareOverlays(overlays, oldOverlays) {
   }
 }
 
-async function updateDatabase(uniqueID, addedOverlays, removedOverlays) {
+/**
+ * Updates the database to add and remove a unit from overlays.
+ * 
+ * This function takes a unit's unique ID, a list of overlay IDs it was just added to, 
+ * and a list of overlay IDs it was just removed from. It constructs MongoDB bulk write
+ * operations to add the unit ID to the "unitsInOverlay" array for any added overlays,
+ * and remove the unit ID from the "unitsInOverlay" array for any removed overlays.
+ * 
+ * The bulk write operations are then executed to update the database in one batch.
+ */
+/**
+ * Updates the unitsInOverlay field of the overlays in the database by adding or removing the given uniqueID.
+ * @param {string} uniqueID - The unique identifier of the unit to be added or removed from the overlays.
+ * @param {Array<string>} addedOverlays - An array of overlay IDs to which the unit should be added.
+ * @param {Array<string>} removedOverlays - An array of overlay IDs from which the unit should be removed.
+ * @returns {Promise<void>} - A Promise that resolves when the updates are complete.
+ */
+async function addAndRemoveUnitsFromOverlayInDatabase(uniqueID, addedOverlays, removedOverlays) {
   // Crear operaciones en lote para actualizar las colecciones
   const bulkOps = [];
 
